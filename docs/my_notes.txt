@@ -1,0 +1,315 @@
+Azure Synapse Analytics:
+- You need to createa  storage data dedicated for snypasse only.
+- It have a dedicate storage data storage. (it easily to identify , and use the storage for synapse because it's alreayd sync when it comes on storage)
+
+This is the output that will be transfer after going on synapse
+- We wan to create a seperate external storage data storge.
+
+Menu
+
+Home
+Data
+Develop
+Integrate - Azure Data Factory / ETL 
+Monitor
+Manage
+
+=============================
+Distribute table:
+ > table appears as single table , but rows are actully stored across 60 distributions;
+
+Distribute strategy
+ > Hash Distribute - should be pick on the last table , largest table , its fact table , numerical value, Hash distirubtion. It will pick a similar value. 
+ > Round Robin distributed - use for staging tables 
+ > Replicated distributions - we use when working on small dimentsion , we will save of the copy of data in all distributions
+
+ ===========================
+
+
+Create a round_table
+
+
+CREATE TABLE round_table
+(
+	id INT,
+	name VARCHAR(4000),
+	salary INT,
+)
+WITH
+(
+	DISTRIBUTION = ROUND_ROBIN
+)
+
+INSERT INTO round_table
+VALUES (1 , "girald" , 10)
+
+SELECT * from round_table
+
+
+============================
+REPLICATE TABLE
+
+CREATE SCHEMA gold
+
+CREATE TABLE gold.dim_product
+(
+	dim_key_prod INT,
+	prod_id INT,
+	prod_name VARCHAR(4000)
+)
+WITH
+(
+	DISTRIBUTION = REPLICATE
+)
+
+CREATE TABLE gold.facttable
+(
+	dim_key_prod INT,
+	revenue INT,
+	cost VARCHAR(4000)
+)
+WITH
+(
+	DISTRIBUTION = HASH(dim_key_prod)
+)
+
+
+==============================
+SERVERLESS SQL POOL
+
+Servless - logical database / logical data warehouse
+
+- logical metadata layer on top of data coming from the datalake
+
+
+Manage table: (Default of Synaps)
+If i drop a table both of this will be gone:
+Meta Store
+Data lake
+
+External table: (control by us , but using external storage )
+If i drop a table only datalake will be gone the meta store will remains:
+Meta Store
+
+How synapseworkspace will be connect to datalake?
+- It will need to create a service principle (Manage Identity)
+
+Logical meta data layer:
+- Open Row Set
+- u nseed to credentials 
+ Prequiste
+
+Create master key
+  - CREATE MASTER KEY ENCRIPTION BY PASSWORD = "giraldpogi";
+
+Create a credential
+ - CREATE DATABASE SCOPED CREDENTIAL giraldcreds
+ 	WITH
+ 		IDENTITY = "Managed Identity"
+
+Creating a External data source
+
+ - CREATE EXTERNAL DATA SOURCE raw_ext_source
+   WITH
+   (
+   		LOCATION = 'https://giralddatalake.dfs.core.windows.net/raw'
+   		CREDENTIALS = 	giraldcreds
+   )
+
+Creating a OpenRowSet
+ 
+  SELECT * FROM 
+     OPENROWSET(
+     	BULK 'revenue',  -<<< inside directory from external source
+     	DATASOURCE = 'raw_ext_source'
+     	FORMAT = "CSV",
+     	PARSER_VERSION = "2.0",
+     	HEADER = TRUE
+     ) as query1
+
+Creating a EXternal Format
+	
+	CREATE EXTERNAL FILE FORMAT	csv_format
+	WITH(
+		FORMAT_TYPE = DELIMITEDTEXT,
+		FORMAT_OPTIONS (
+				FIELD_TERMINATOR = '',
+				ENCODING = 'UTF-8'
+		)
+	)
+
+	CREATE EXTERNAL FILE FORMAT parquet_format
+	WITH(
+		FORMAT_TYPE = PARQUET,
+		DATA_COMPRESSION = 'org.apache.hadoop.io.compress.SnappyCodec'
+	)
+
+
+Creating a External table
+	1. External Data Source
+	2. External File Format
+	3. Location
+
+CREATE EXTERNAL TABLE revenue_ext_table
+(
+	Dealer_ID VARCHAR(4000),
+	Model_ID VARCHAR(4000),
+	Branch_ID VARCHAR(4000),
+	Date_ID VARCHAR(4000),
+	Unit_Sold VARCHAR(4000),
+	Revenue  VARCHAR(4000)
+)
+WITH(
+	LOCATION = 'revenue', <-------- Location of directory that you need to saved
+	DATA_SOURCE = 'raw_ext_source',   <--------- External data source
+	FILE_FORMAT = csv_format   <--------- External file format
+)
+
+
+Creating a CETAS
+CREATE EXTERNAL TABLE AS SELECT
+	
+	CREATE EXTERNAL TABLE revenue_cetas
+	WITH(
+		LOCATION = 'cetas_revenue' <-------- it will create a new folder / dir
+		DATA_SOURCE = 'raw_ext_source',
+		FILE_FORMAT = parquet_format
+	)
+	AS
+	SELECT * FROM 
+     OPENROWSET(
+     	BULK 'revenue',  -<<< inside directory from external source
+     	DATASOURCE = 'raw_ext_source'
+     	FORMAT = "CSV",
+     	PARSER_VERSION = "2.0",
+     	HEADER = TRUE
+     ) as query1
+
+ Step of execution:
+  1. It will copy the result of selected query to the datalake base
+  2. Now it will create an external table right the top of that data.
+  3. Then the result will be transfer in specific locatio nwith specific file format.
+
+CREATING A VIEWS ON SELECT using OPENROWSET
+
+CREATE VIEW revenue_view
+AS
+	SELECT * FROM 
+     OPENROWSET(
+     	BULK 'revenue',  -<<< inside directory from external source
+     	DATASOURCE = 'raw_ext_source'
+     	FORMAT = "CSV",
+     	PARSER_VERSION = "2.0",
+     	HEADER = TRUE
+     ) as query1
+
+
+
+
+=================================
+Linking your external datalke in synapse 
+
+Linked Services: create a linkservice on your external datalakes
+ - Authentication type : System - Asigned manage identity
+
+ Storage account name:
+  will be your external datalake
+
+  Create
+
+=================================
+How we can just load data in parquet format in my table that will be creating to a dedicated sQL ?
+
+1. We need to run all the creation of credentials
+2. Load the external data source and externald file format (parquet)
+3. Copy Into
+=====================
+DROP TABLE copy_into_table
+
+# COPY INTO
+CREATE TABLE copy_into_table
+(
+	Dealer_ID VARCHAR(4000),
+	Model_ID VARCHAR(4000),
+	Branch_ID VARCHAR(4000),
+	Date_ID VARCHAR(4000),
+	Unit_Sold BIGINT,
+	Revenue  BIGINT
+)
+WITH
+(
+	DISTIRUBITION = ROUND_ROBIN
+)
+=====================
+#LOADING DATA:
+COPY INTO copy_into_table
+(  <------ Defined a schema and numbering
+	Dealer_ID 1,
+	Model_ID 2,
+	Branch_ID 3,
+	Date_ID 4,
+	Unit_Sold 5,
+	Revenue 6 
+)
+FROM 'https://giralddatalake.dfs.core.windows.net/raw/cetas_revenue/'
+WITH
+(
+	FILE_TYPE = 'PARQUET',
+	CREDENTIAL = (IDENTITY = 'Manage Identity')
+)
+
+#Run query
+SELECT * FROM copy_into_table 
+
+=========================
+POLYBASE | CTAS
+
+Syntax:
+
+
+ CREATE EXTERNAL DATA SOURCE raw_ext_source_dfs
+   WITH
+   (
+   		LOCATION = 'abfs://raw@giralddatalake.dfs.core.windows.net/'
+   		CREDENTIALS = 	giraldcreds
+   )
+
+
+CREATE EXTERNAL TABLE parquet_table
+	(
+		Dealer_ID VARCHAR(4000),
+		Model_ID VARCHAR(4000),
+		Branch_ID VARCHAR(4000),
+		Date_ID VARCHAR(4000),
+		Unit_Sold BIGINT,
+		Revenue  BIGINT
+	)
+	WITH(
+		LOCATION = 'cetas_revenue',
+		DATA_SOURCE = raw_ext_source_dfs,
+		FILE_FORMAT = parquet_format
+	)
+
+-- CTAS / POLYBASE
+
+CREATE TABLE poly_table
+WITH(
+
+	DISTIRUBITION = ROUND_ROBIN
+)
+AS
+SELECT * from parquet_table
+
+SELECT * from poly_table
+
+
+
+AZURE DATA FACTORY
+can be run as well on synapse (using ADF)
+
+
+APACHE SPARK POOL
+can be run as well on synapse (using pyspark)
+
+
+Synpase is overall 1 solution 
